@@ -342,3 +342,8 @@ See [Latency numbers every programmer should know](https://github.com/donnemarti
 
 * Continue benchmarking and monitoring your system to address bottlenecks as they come up
 * Scaling is an iterative process
+
+## 訳者: よくわからんこと/計算してないこと
+* レプリケーションは何重にすべきなんだろう。
+    * 読み込み要求は1個で間に合いそうな気がする。
+        * DBには360Mのpasteがあるはずなので、そこから必要なものを探せなければいけない。インデックスが張ってあるのでlog_2(360M)が大体8なので全く間に合う気がする。
