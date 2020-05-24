@@ -1,191 +1,194 @@
-# Design a system that scales to millions of users on AWS
+# AWSで何百万のユーザにスケールするシステムを設計しよう
 
-*Note: This document links directly to relevant areas found in the [system design topics](https://github.com/donnemartin/system-design-primer#index-of-system-design-topics) to avoid duplication.  Refer to the linked content for general talking points, tradeoffs, and alternatives.*
+訳注: 前提って訳したけど仮定のほうがよかったなあ
 
-## Step 1: Outline use cases and constraints
+*注意: この文書は重複をさけるために[システム設計目次](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md)の隣接分野に直接リンクを張ってあります。一般に話すポイント、トレードオフ、代替案についてはリンク先のコンテンツをご覧ください。
 
-> Gather requirements and scope the problem.
-> Ask questions to clarify use cases and constraints.
-> Discuss assumptions.
+## Step 1: ユースケースと制約をざっくり決めよう
 
-Without an interviewer to address clarifying questions, we'll define some use cases and constraints.
+> 問題の要件と範囲の情報を集めよう。ユースケースと想定される制約をはっきりさせるために質問をしよう。システムの前提について議論しよう。
 
-### Use cases
+今回は質問をする相手がいないので、ユースケースと制約については示しておくことにします。
 
-Solving this problem takes an iterative approach of: 1) **Benchmark/Load Test**, 2) **Profile** for bottlenecks 3) address bottlenecks while evaluating alternatives and trade-offs, and 4) repeat, which is good pattern for evolving basic designs to scalable designs.
+### ユースケース
 
-Unless you have a background in AWS or are applying for a position that requires AWS knowledge, AWS-specific details are not a requirement.  However, **much of the principles discussed in this exercise can apply more generally outside of the AWS ecosystem.**
+この問題を解くには繰り返しのアプローチを取ります:
+ 1)**ベンチマーク/負荷試験**する、 2)ボトルネックを**プロファイル**する、 3)代替案とトレードオフを評価しながらボトルネックに対処する、4)これを繰り返す。
+ これが基本的な設計をスケーラブルな設計に発展させるための良いパターンです。
 
-#### We'll scope the problem to handle only the following use cases
+AWSの背景知識があるだとかAWSの知識が必要とされる職業に応募するだとかでなければ、AWS特有の知識は必要とされません。しかしながら、**この演習で議論される原則のほとんどはAWSのエコシステムの外にも一般的に適用できるものです。**
 
-* **User** makes a read or write request
-    * **Service** does processing, stores user data, then returns the results
-* **Service** needs to evolve from serving a small amount of users to millions of users
-    * Discuss general scaling patterns as we evolve an architecture to handle a large number of users and requests
-* **Service** has high availability
+#### 今回は次のユースケースのみを扱う問題に取り組みます
 
-### Constraints and assumptions
+* **ユーザ**は読み込みと書き込みのリクエストをする
+    * **サービス**は処理、データの保存と結果の返却をする
+* **サービス**は少数のユーザから何百万ものユーザにまでサービスを提供できるよう発展していかねばならない
+    * たくさんのユーザとリクエストを捌くためのアーキテクチャの発展をするための一般的なスケーリングのパターンについて議論しましょう
+* **サービス**は高い可用性(availability)を持つ
 
-#### State assumptions
+### 制約と前提
 
-* Traffic is not evenly distributed
-* Need for relational data
-* Scale from 1 user to tens of millions of users
-    * Denote increase of users as:
+#### 稼動している状態についての前提
+
+* トラフィックは均等に分布しない
+* リレーショナルデータが必要
+* 1ユーザから何千万ものユーザにスケールする
+    * ユーザの増加を次のように記す:
         * Users+
         * Users++
         * Users+++
         * ...
-    * 10 million users
-    * 1 billion writes per month
-    * 100 billion reads per month
-    * 100:1 read to write ratio
-    * 1 KB content per write
+    * 10Mユーザ
+    * 一ヶ月に1G書き込み
+    * 一ヶ月に100G読み込み
+    * 100:1の読み込み書き込み比
+    * 1KBコンテンツ/書き込み
 
-#### Calculate usage
+#### 使用量を計算する
 
-**Clarify with your interviewer if you should run back-of-the-envelope usage calculations.**
+**使用量を封筒裏計算(ざっくり計算すること)する必要があるかどうかは面接官に聞いてはっきりさせましょう**
 
-* 1 TB of new content per month
-    * 1 KB per write * 1 billion writes per month
-    * 36 TB of new content in 3 years
-    * Assume most writes are from new content instead of updates to existing ones
-* 400 writes per second on average
-* 40,000 reads per second on average
+* 一ヶ月に1TBの新規コンテンツ
+    * 1KB/書き込み * 1G書き込み/月
+    * 3年で36TBの新規コンテンツ
+    * ほとんどの書き込みは既存のものの更新ではなく新規コンテンツのためにおこる
+* 平均400書き込み/秒
+* 平均40K読み込み/秒
 
-Handy conversion guide:
+便利な変換ガイド:
+* 2.5M 秒/月
+* 1リクエスト/秒 = 2.5Mリクエスト/月
+* 40リクエスト/秒 = 100Mリクエスト/月
+* 400リクエスト/秒 = 1Gリクエスト/月 (訳注: もともとbillionって書いてありましたがSI補助のほうが日本人的には楽なので…。10の9乗です。)
 
-* 2.5 million seconds per month
-* 1 request per second = 2.5 million requests per month
-* 40 requests per second = 100 million requests per month
-* 400 requests per second = 1 billion requests per month
 
-## Step 2: Create a high level design
+## Step 2: ハイレベルな(おおまかな)設計を作ろう
 
-> Outline a high level design with all important components.
+> 重要な要素をすべて含んだハイレベルデザインをざっくり作ろう。
 
 ![Imgur](http://i.imgur.com/B8LDKD7.png)
 
-## Step 3: Design core components
+## Step 3: コア部品を設計しよう
 
-> Dive into details for each core component.
+> それぞれのコア部品の詳細に分け入ろう。
 
-### Use case: User makes a read or write request
+### ユースケース: ユーザは書き込みと読み込みの要求をする
 
-#### Goals
+#### 目標
 
-* With only 1-2 users, you only need a basic setup
-    * Single box for simplicity
-    * Vertical scaling when needed
-    * Monitor to determine bottlenecks
+* 1-2ユーザなら基本的な設定で十分です
+    * 簡単のため1マシン(box)でやる
+    * 必要なときに垂直スケーリングする
+    * ボトルネック特定のため監視する
 
-#### Start with a single box
+#### 1マシンからはじめる
 
-* **Web server** on EC2
-    * Storage for user data
-    * [**MySQL Database**](https://github.com/donnemartin/system-design-primer#relational-database-management-system-rdbms)
+* **ウェブサーバ**をEC2上に
+    * ユーザのデータを保存する
+    * [**MySQLデータベース**](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E3%83%AA%E3%83%AC%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%8A%E3%83%AB%E3%83%87%E3%83%BC%E3%82%BF%E3%83%99%E3%83%BC%E3%82%B9%E3%83%9E%E3%83%8D%E3%82%B8%E3%83%A1%E3%83%B3%E3%83%88%E3%82%B7%E3%82%B9%E3%83%86%E3%83%A0-rdbms)
 
-Use **Vertical Scaling**:
+**垂直スケーリング**をつかう:
 
-* Simply choose a bigger box
-* Keep an eye on metrics to determine how to scale up
-    * Use basic monitoring to determine bottlenecks: CPU, memory, IO, network, etc
-    * CloudWatch, top, nagios, statsd, graphite, etc
-* Scaling vertically can get very expensive
-* No redundancy/failover
+* 単に強力なマシンを使う
+* どうやってスケールアップするか決めるためにメトリックに注意する
+    * ボトルネックを特定するため基本的なモニタリングを使う: CPU、メモリ、IO、ネットワーク、その他
+    * Cloudwatch, top(訳注: プロセスの状況確認), nagios(訳注: ネットワークサービス諫死), statsd(訳注: ログの統計解析？), graphite, その他
+* 垂直スケーリングはとても高額いなりうる
+* 冗長性やフェイルオーバーはない
 
-*Trade-offs, alternatives, and additional details:*
+*トレードオフ、代替案、さらなる詳細:*
+* **垂直スケーリング**の代替案は[**水平スケーリング**](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E6%B0%B4%E5%B9%B3%E3%82%B9%E3%82%B1%E3%83%BC%E3%83%AA%E3%83%B3%E3%82%B0)です。
 
-* The alternative to **Vertical Scaling** is [**Horizontal scaling**](https://github.com/donnemartin/system-design-primer#horizontal-scaling)
+#### SQLから始め、NoSQLを検討する
 
-#### Start with SQL, consider NoSQL
+制約によるとリレーショナルデータが必要です。1マシンで**MySQLデータベース**を使うところからスタートしてみましょう。
 
-The constraints assume there is a need for relational data.  We can start off using a **MySQL Database** on the single box.
-
-*Trade-offs, alternatives, and additional details:*
-
+**トレードオフ、代替案、さらなる詳細**
 * See the [Relational database management system (RDBMS)](https://github.com/donnemartin/system-design-primer#relational-database-management-system-rdbms) section
 * Discuss reasons to use [SQL or NoSQL](https://github.com/donnemartin/system-design-primer#sql-or-nosql)
 
-#### Assign a public static IP
+#### パブリックな静的IPを割り当てる
 
-* Elastic IPs provide a public endpoint whose IP doesn't change on reboot
-* Helps with failover, just point the domain to a new IP
+* エラスティックIPは再起動してもIPアドレスのかわらないパブリックなエンドポイントとして使えます
+* フェイルオーバーに便利です。ただ新しいIPアドレスにドメインを振り向けるだけです。
 
-#### Use a DNS
 
-Add a **DNS** such as Route 53 to map the domain to the instance's public IP.
+#### DNSをつかう
 
-*Trade-offs, alternatives, and additional details:*
+Route53といった**DNS**を追加し、ドメインをにインスタンスのパブリックIPにマップしましょう。
+
+**トレードオフ、代替案、さらなる詳細**
 
 * See the [Domain name system](https://github.com/donnemartin/system-design-primer#domain-name-system) section
 
-#### Secure the web server
+#### ウェブサーバをセキュアにする
 
-* Open up only necessary ports
-    * Allow the web server to respond to incoming requests from:
-        * 80 for HTTP
-        * 443 for HTTPS
-        * 22 for SSH to only whitelisted IPs
-    * Prevent the web server from initiating outbound connections
+* 必要なポートだけを開けましょう
+    * ウェブサーバはここからのインカミングリクエストだけに応答する:
+        * HTTPの80番
+        * HTTPSの443番
+        * ホワイトリストに入っているIPにだけSSHの22番
+    * アウトバウンド接続を開始するのはできないようにする
 
-*Trade-offs, alternatives, and additional details:*
+**トレードオフ、代替案、さらなる詳細**
 
 * See the [Security](https://github.com/donnemartin/system-design-primer#security) section
 
-## Step 4: Scale the design
+## Step 4: 設計をスケールさせる
 
-> Identify and address bottlenecks, given the constraints.
+> 制約のもとでボトルネックを特定し対処する
 
 ### Users+
 
 ![Imgur](http://i.imgur.com/rrfjMXB.png)
 
-#### Assumptions
+#### 前提
 
-Our user count is starting to pick up and the load is increasing on our single box.  Our **Benchmarks/Load Tests** and **Profiling** are pointing to the **MySQL Database** taking up more and more memory and CPU resources, while the user content is filling up disk space.
+ユーザ数は増加しはじめ、マシンへの負荷が増加しています。**ベンチマーク/負荷試験**と**プロファイリング**は**MySQLデータベース**がメモリとCPUリソースをどんどん占有し、他方でユーザコンテンツがディスクを圧迫していることを示唆しています。
 
-We've been able to address these issues with **Vertical Scaling** so far.  Unfortunately, this has become quite expensive and it doesn't allow for independent scaling of the **MySQL Database** and **Web Server**.
+これまでは**垂直スケーリング**で問題に対処することができました。不幸なことに、今回はそれは高くなりすぎであり、またそれでは**MySQLデータベース**と**ウェブサーバ**を個別にスケールさせることができません。
 
-#### Goals
+#### 目標
 
-* Lighten load on the single box and allow for independent scaling
-    * Store static content separately in an **Object Store**
-    * Move the **MySQL Database** to a separate box
-* Disadvantages
-    * These changes would increase complexity and would require changes to the **Web Server** to point to the **Object Store** and the **MySQL Database**
-    * Additional security measures must be taken to secure the new components
-    * AWS costs could also increase, but should be weighed with the costs of managing similar systems on your own
+* 1マシンへの負荷を軽減して、個別のスケーリングができるようにしましょう
+    * 静的コンテンツを分離して**オブジェクトストア**に保存する
+    * **MySQLデータベース**を別のマシンに移動する
+* 欠点
+    * これらの変更は複雑さを増し、**ウェブサーバ**が**オブジェクトストア**と**MySQLデータベース**を指すように変更しなければならない
+    * 新しい部品をセキュアにするために追加のセキュリティ対策が必要
+    * AWSのコストも増えるかもしれませんが、自分で動揺のシステムを管理するコストと比較検討すべきでしょう
 
-#### Store static content separately
 
-* Consider using a managed **Object Store** like S3 to store static content
-    * Highly scalable and reliable
-    * Server side encryption
-* Move static content to S3
-    * User files
+#### 静的コンテンツを分離して保存しよう
+
+* 静的コンテンツを保存するためにS3のようなマネージドな**オブジェクトストア**を使うことを考えましょう
+    * 高度にスケーラブルで信頼性がある
+    * サーバ側で暗号化
+* 静的コンテンツをS3に移す
+    * ユーザファイル
     * JS
     * CSS
-    * Images
-    * Videos
+    * 画像
+    * 動画
 
-#### Move the MySQL database to a separate box
+#### MySQLデータベースを分離したマシンに移そう
 
-* Consider using a service like RDS to manage the **MySQL Database**
-    * Simple to administer, scale
-    * Multiple availability zones
-    * Encryption at rest
+* RDS(Amazon Relational Database Service)といったマネージドな**MySQLデータベース**を利用することを考えましょう
+    * 管理やスケーリングがシンプル
+    * 複数のアベイラビリティゾーンが利用できる
+    * 保存データの暗号化(encryption at rest)
 
-#### Secure the system
+#### システムをセキュアにする
 
-* Encrypt data in transit and at rest
-* Use a Virtual Private Cloud
-    * Create a public subnet for the single **Web Server** so it can send and receive traffic from the internet
-    * Create a private subnet for everything else, preventing outside access
-    * Only open ports from whitelisted IPs for each component
-* These same patterns should be implemented for new components in the remainder of the exercise
+* データを通信時、保存時に暗号化する
+* バーチャルプライベートクラウド(VPC)を使う(訳注: 自社でのみ運用するクラウドをプライベートクラウドという)
+    * インターネットとトラフィックをやりとりっできるように、1つの**ウェブサーバ**にパブリックサブネットを設定する
+        * 訳注: パブリックサブネットは、プライベートクラウドで外部と通信できるマシンを特定するためのサブネットらしい
+    * 外部からのアクセスを防ぐために、その他すべてにプライベートサブネットを適用する
+    * それぞれの部品はホワイトリストに入っているIPからのみポートを開ける
+* 動揺のパターンはこの演習ののこりにでてくる新しい部品にも適用されます
 
-*Trade-offs, alternatives, and additional details:*
+**トレードオフ、代替案、さらなる詳細**
 
 * See the [Security](https://github.com/donnemartin/system-design-primer#security) section
 
@@ -193,7 +196,9 @@ We've been able to address these issues with **Vertical Scaling** so far.  Unfor
 
 ![Imgur](http://i.imgur.com/raoFTXM.png)
 
-#### Assumptions
+#### 前提
+
+
 
 Our **Benchmarks/Load Tests** and **Profiling** show that our single **Web Server** bottlenecks during peak hours, resulting in slow responses and in some cases, downtime.  As the service matures, we'd also like to move towards higher availability and redundancy.
 
