@@ -2,7 +2,7 @@
 
 # The System Design Primer
 ashiato45によるfork。solutionにたいする私訳。
-* [pastebin](solutions/pastebin)
+* [pastebin](tree/master/solutions/pastebin)
 
 <p align="center">
   <img src="http://i.imgur.com/jj3A5N8.png"/>
