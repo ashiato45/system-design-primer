@@ -198,28 +198,28 @@ Route53といった**DNS**を追加し、ドメインをにインスタンスの
 
 #### 前提
 
+**ベンチマーク/負荷試験**と**プロファイリング**は(いまのところ1つの)**ウェブサーバ**がピーク時にボトルネックとなり、遅いレスポンスや時にはダウンタイムを引き起こしていることを明らかにしました。サービスが成熟するについれて、高い可用性や冗長性の方向にも進みたいものです。
+
+#### 目標
+
+* 次の目標は**ウェブサーバ**のスケーリングの問題に取り組もうとするものです
+    * **ベンチマーク/負荷試験**と**プロファイリング**を踏まえ、次の1、2個の技法を実装すれば十分でしょう
+* 単一障害点(SPF, Single Points of Failrure)に対処し増大する負荷に対応するため[**水平スケーリング**](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E6%B0%B4%E5%B9%B3%E3%82%B9%E3%82%B1%E3%83%BC%E3%83%AA%E3%83%B3%E3%82%B0)を使う
+    * Amazon ELBやHAProxy(訳注：ロードバランサの機能を提供できるOSS)といった[**ロードバランサ**](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E3%83%AD%E3%83%BC%E3%83%89%E3%83%90%E3%83%A9%E3%83%B3%E3%82%B5%E3%83%BC)を追加する
+        * ELBは高可用である
+        * もしも自分の**ロードバランサ**を設定しているなら、複数サーバを[アクティブ-アクティブ](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E3%82%A2%E3%82%AF%E3%83%86%E3%82%A3%E3%83%96%E3%82%A2%E3%82%AF%E3%83%86%E3%82%A3%E3%83%96)や[アクティブ-パッシブ](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E3%82%A2%E3%82%AF%E3%83%86%E3%82%A3%E3%83%96%E3%83%91%E3%83%83%E3%82%B7%E3%83%96)で複数のアベイラビリティゾーンに設置すると可用性が上がります
+        * **ロードバランサ**の側でSSLを数量してバックエンドサーバでの計算負荷を軽減し、認証管理を単純化します。
+    * 複数の**ウェブサーバ**を複数のアベイラビリティゾーンに展開する
+    * 複数の**MySQL**インスタンスを複数のアベイラビリティゾーンをまたがって[**マスタースレーブフェイルオーバー**](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E3%83%9E%E3%82%B9%E3%82%BF%E3%83%BC%E3%82%B9%E3%83%AC%E3%83%BC%E3%83%96-%E3%83%AC%E3%83%97%E3%83%AA%E3%82%B1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3)で使い、冗長性を向上させる
+* **ウェブサーバ**を[**アプリケーションサーバ**](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E3%82%A2%E3%83%97%E3%83%AA%E3%82%B1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3%E5%B1%A4)から切り出す
+    * 両方のレイヤを独立にスケールし設定する
+    * **ウェブサーバ**は[**リバースプロキシ**](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E3%83%AA%E3%83%90%E3%83%BC%E3%82%B9%E3%83%97%E3%83%AD%E3%82%AD%E3%82%B7web%E3%82%B5%E3%83%BC%E3%83%90%E3%83%BC)として稼動することができる
+    * たとえば、**アプリケーションサーバ**のいくらかが**Read API**を、残りが**Write API**を担当するようにできる
+
+* 静的(一部動的)コンテンツをCloudFrontのような[**コンテンツデリバリネットワーク(CDN)**](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E3%82%B3%E3%83%B3%E3%83%86%E3%83%B3%E3%83%84%E3%83%87%E3%83%AA%E3%83%90%E3%83%AA%E3%83%BC%E3%83%8D%E3%83%83%E3%83%88%E3%83%AF%E3%83%BC%E3%82%AFcontent-delivery-network)に移し負荷とレイテンシを軽減する
 
 
-Our **Benchmarks/Load Tests** and **Profiling** show that our single **Web Server** bottlenecks during peak hours, resulting in slow responses and in some cases, downtime.  As the service matures, we'd also like to move towards higher availability and redundancy.
-
-#### Goals
-
-* The following goals attempt to address the scaling issues with the **Web Server**
-    * Based on the **Benchmarks/Load Tests** and **Profiling**, you might only need to implement one or two of these techniques
-* Use [**Horizontal Scaling**](https://github.com/donnemartin/system-design-primer#horizontal-scaling) to handle increasing loads and to address single points of failure
-    * Add a [**Load Balancer**](https://github.com/donnemartin/system-design-primer#load-balancer) such as Amazon's ELB or HAProxy
-        * ELB is highly available
-        * If you are configuring your own **Load Balancer**, setting up multiple servers in [active-active](https://github.com/donnemartin/system-design-primer#active-active) or [active-passive](https://github.com/donnemartin/system-design-primer#active-passive) in multiple availability zones will improve availability
-        * Terminate SSL on the **Load Balancer** to reduce computational load on backend servers and to simplify certificate administration
-    * Use multiple **Web Servers** spread out over multiple availability zones
-    * Use multiple **MySQL** instances in [**Master-Slave Failover**](https://github.com/donnemartin/system-design-primer#master-slave-replication) mode across multiple availability zones to improve redundancy
-* Separate out the **Web Servers** from the [**Application Servers**](https://github.com/donnemartin/system-design-primer#application-layer)
-    * Scale and configure both layers independently
-    * **Web Servers** can run as a [**Reverse Proxy**](https://github.com/donnemartin/system-design-primer#reverse-proxy-web-server)
-    * For example, you can add **Application Servers** handling **Read APIs** while others handle **Write APIs**
-* Move static (and some dynamic) content to a [**Content Delivery Network (CDN)**](https://github.com/donnemartin/system-design-primer#content-delivery-network) such as CloudFront to reduce load and latency
-
-*Trade-offs, alternatives, and additional details:*
+**トレードオフ、代替案、さらなる詳細**
 
 * See the linked content above for details
 
@@ -227,37 +227,48 @@ Our **Benchmarks/Load Tests** and **Profiling** show that our single **Web Serve
 
 ![Imgur](http://i.imgur.com/OZCxJr0.png)
 
-**Note:** **Internal Load Balancers** not shown to reduce clutter
+**注意:** **内部ロードバランサ**はごちゃごちゃしないために描いてません
 
-#### Assumptions
+#### 仮定
 
-Our **Benchmarks/Load Tests** and **Profiling** show that we are read-heavy (100:1 with writes) and our database is suffering from poor performance from the high read requests.
+**ベンチマーク/負荷試験**と**プロファイリング**は読み込みが重く(書き込みの100倍)、データベースは高い読み込みリクエストからくる低性能に苦しんでいます。
 
-#### Goals
 
-* The following goals attempt to address the scaling issues with the **MySQL Database**
-    * Based on the **Benchmarks/Load Tests** and **Profiling**, you might only need to implement one or two of these techniques
-* Move the following data to a [**Memory Cache**](https://github.com/donnemartin/system-design-primer#cache) such as Elasticache to reduce load and latency:
-    * Frequently accessed content from **MySQL**
-        * First, try to configure the **MySQL Database** cache to see if that is sufficient to relieve the bottleneck before implementing a **Memory Cache**
-    * Session data from the **Web Servers**
-        * The **Web Servers** become stateless, allowing for **Autoscaling**
-    * Reading 1 MB sequentially from memory takes about 250 microseconds, while reading from SSD takes 4x and from disk takes 80x longer.<sup><a href=https://github.com/donnemartin/system-design-primer#latency-numbers-every-programmer-should-know>1</a></sup>
-* Add [**MySQL Read Replicas**](https://github.com/donnemartin/system-design-primer#master-slave-replication) to reduce load on the write master
-* Add more **Web Servers** and **Application Servers** to improve responsiveness
+#### 目標
 
-*Trade-offs, alternatives, and additional details:*
+* 次の目標は**MySQLデータベース**のスケーリングの問題に対処しようとするものです
+    * **ベンチマーク/負荷試験**と**プロファイリング**によれば、1つか2つの技法を実装すれば十分でしょう
+* 次のデータをElasticcacheといった[**メモリキャッシュ**](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E3%82%AD%E3%83%A3%E3%83%83%E3%82%B7%E3%83%A5)に移動し、負荷とレイテンシを軽減する:
+    * **MySQL**からよくアクセスされるコンテンツを移す
+        * まず、**メモリキャッシュ**を実装する前に**MySQLデータベース**のキャッシュを設定してボトルネックを解消するのに十分かを見るべきでしょう
+    * **ウェブサーバ**からセッションデータを移す
+        * **ウェブサーバ**はステートレスになり、**オートスケーリング**ができるようになる
+    ** 1MBをメモリからシーケンシャルに読むには約250msかかる一方、SSDから読むには約4倍、ディスクから読むには約80倍かかります。<sup><a href=https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E5%85%A8%E3%81%A6%E3%81%AE%E3%83%97%E3%83%AD%E3%82%B0%E3%83%A9%E3%83%9E%E3%83%BC%E3%81%8C%E7%9F%A5%E3%82%8B%E3%81%B9%E3%81%8D%E3%83%AC%E3%82%A4%E3%83%86%E3%83%B3%E3%82%B7%E3%83%BC%E5%80%A4>1</a></sup>
+* [**MySQL読み込みレプリケーション**](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E3%83%9E%E3%82%B9%E3%82%BF%E3%83%BC%E3%82%B9%E3%83%AC%E3%83%BC%E3%83%96-%E3%83%AC%E3%83%97%E3%83%AA%E3%82%B1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3)を追加し、書き込みマスターへの負荷を軽減する
+* さらに**ウェブサーバ**と**アプリケーションサーバ**を追加してレスポンスを上げる
+
+
+
+**トレードオフ、代替案、さらなる詳細**
 
 * See the linked content above for details
 
-#### Add MySQL read replicas
+#### SQL読み込みレプリケーションを追加する
+
+* **メモリキャッシュ**を追加してスケールさせる他にも、**MySQL読み込みレプリケーション**が**MySQL書き込みマスター**の負荷を軽減するのに役立ちます
+* **ウェブサーバ**にロジックを追加して、書き込みと読み込みを分割する
+* **MySQL読み込みレプリケーション**の前に**ロードバランサ**を置く(ごちゃごちゃを避けるために図示していない)
+    * 訳注: 内部ロードバランサは省略ってそういうことか…
+* ほとんどのサービスは読み込みが重いか書き込みが重いかです
+
+
 
 * In addition to adding and scaling a **Memory Cache**, **MySQL Read Replicas** can also help relieve load on the **MySQL Write Master**
 * Add logic to **Web Server** to separate out writes and reads
 * Add **Load Balancers** in front of **MySQL Read Replicas** (not pictured to reduce clutter)
 * Most services are read-heavy vs write-heavy
 
-*Trade-offs, alternatives, and additional details:*
+**トレードオフ、代替案、さらなる詳細**
 
 * See the [Relational database management system (RDBMS)](https://github.com/donnemartin/system-design-primer#relational-database-management-system-rdbms) section
 
@@ -265,18 +276,18 @@ Our **Benchmarks/Load Tests** and **Profiling** show that we are read-heavy (100
 
 ![Imgur](http://i.imgur.com/3X8nmdL.png)
 
-#### Assumptions
+#### 仮定
 
-Our **Benchmarks/Load Tests** and **Profiling** show that our traffic spikes during regular business hours in the U.S. and drop significantly when users leave the office.  We think we can cut costs by automatically spinning up and down servers based on actual load.  We're a small shop so we'd like to automate as much of the DevOps as possible for **Autoscaling** and for the general operations.
+**ベンチマーク/負荷試験**と**プロファイリング**は、トラフィックがアメリカの業務時間中に急上昇し、ユーザが退勤したころに急減するということを示しました。実際の負荷に応じてサーバを自動的に立ち上げたり落としたりすればコストを削減できるでしょう。うちは小さい店なので、**オートスケーリング**とその他操作のためにできるだけDevOpsを自動化したいと思います。
 
-#### Goals
+#### 目標
 
-* Add **Autoscaling** to provision capacity as needed
-    * Keep up with traffic spikes
-    * Reduce costs by powering down unused instances
-* Automate DevOps
+* **オートスケーリング**を追加し、必要なだけプロビジョンできるようにする
+    * トラフィックの急上昇についていく
+    * 使っていないインスタンスを落としてコストを削減する
+* DevOpsを自動化する
     * Chef, Puppet, Ansible, etc
-* Continue monitoring metrics to address bottlenecks
+* ボトルネックに対処するため引き続きメトリックを監視する
     * **Host level** - Review a single EC2 instance
     * **Aggregate level** - Review load balancer stats
     * **Log analysis** - CloudWatch, CloudTrail, Loggly, Splunk, Sumo
@@ -284,41 +295,45 @@ Our **Benchmarks/Load Tests** and **Profiling** show that our traffic spikes dur
     * **Handle notifications and incidents** - PagerDuty
     * **Error Reporting** - Sentry
 
-#### Add autoscaling
 
-* Consider a managed service such as AWS **Autoscaling**
-    * Create one group for each **Web Server** and one for each **Application Server** type, place each group in multiple availability zones
-    * Set a min and max number of instances
-    * Trigger to scale up and down through CloudWatch
-        * Simple time of day metric for predictable loads or
-        * Metrics over a time period:
-            * CPU load
-            * Latency
-            * Network traffic
-            * Custom metric
-    * Disadvantages
-        * Autoscaling can introduce complexity
-        * It could take some time before a system appropriately scales up to meet increased demand, or to scale down when demand drops
+
+#### オートスケーリングを追加する
+
+* AWS**オートスケーリング**といったマネージドなサービスを利用することを検討する
+    * それぞれの**ウェブサーバ**に1グループ、**アプリケーションサーバ**タイプにも1つグループを作り、それぞれのグループを複数のアベイラビリティーゾーンに配置する
+    * インスタンスの最小数と最大数を設定する
+    * CloudWatchの情報をつかってスケールアップとダウンを引き起こす
+        * 予想できる負荷には時刻メトリックを使うか、
+        * 時間にわたるメトリックを使う:
+            * CPU負荷
+            * レイテンシ
+            * ネットワークトラフィック
+            * 独自メトリック
+    * 欠点
+        * オートスケーリングは複雑にしてしまう
+        * システムが適切に需要増に応じてスケールアップしたり、需要減に応じてスケールダウンするのに時間がかかるかもしれない
+
 
 ### Users+++++
 
 ![Imgur](http://i.imgur.com/jj3A5N8.png)
 
-**Note:** **Autoscaling** groups not shown to reduce clutter
+**注意:** **内部ロードバランサ**はごちゃごちゃしないために描いてません
 
-#### Assumptions
+#### 仮定
 
-As the service continues to grow towards the figures outlined in the constraints, we iteratively run **Benchmarks/Load Tests** and **Profiling** to uncover and address new bottlenecks.
+サービスが制約のところに並べた状況に近づいてきたので、**ベンチマーク/負荷試験**と**プロファイリング**を実行して新しいボトルネックを見つけることを繰り返します。
 
-#### Goals
+#### 目標
 
-We'll continue to address scaling issues due to the problem's constraints:
+ひきつづきスケーリングの問題に取り組み制約の問題を解決します:
 
-* If our **MySQL Database** starts to grow too large, we might consider only storing a limited time period of data in the database, while storing the rest in a data warehouse such as Redshift
-    * A data warehouse such as Redshift can comfortably handle the constraint of 1 TB of new content per month
-* With 40,000 average read requests per second, read traffic for popular content can be addressed by scaling the **Memory Cache**, which is also useful for handling the unevenly distributed traffic and traffic spikes
-    * The **SQL Read Replicas** might have trouble handling the cache misses, we'll probably need to employ additional SQL scaling patterns
-* 400 average writes per second (with presumably significantly higher peaks) might be tough for a single **SQL Write Master-Slave**, also pointing to a need for additional scaling techniques
+* もし**MySQLデータベース**が大きくなりすぎたようなら、限られた期間のデータだけをデータベースに残し、残りはReshiftといったデータウェアハウスにしまう
+    * Redshiftのようなデータウェアハウスは一ヶ月1TB程度の新規コンテンツであれば易々と取り扱えます
+* 平均秒間40Kの読み込みリクエストについては、人気コンテンツへの読み込みトラフィックは**メモリキャッシュ**をスケールすることで対処でき、またこれは不均等に分布したトラフィックとトラフィックの急上昇を捌くにも有効です
+    * **SQL読み込みレプリケーション**はキャッシュミスを処理するのに問題が起こるかもしれず、SQLをスケールさせるための別のパターンを利用する必要があるかもしれません
+* 秒間平均400の書き込み要求(ピーク時はもっと多いでしょう)は1つの**SQL書き込みマスタースレーブ**には苦しいかもしれず、さらにスケールさせる技法が必要かもしれません。
+    * 訳注: 1KB/書き込みなので、400KB/秒の書き込みとなる。
 
 SQL scaling patterns include:
 
@@ -327,19 +342,21 @@ SQL scaling patterns include:
 * [Denormalization](https://github.com/donnemartin/system-design-primer#denormalization)
 * [SQL Tuning](https://github.com/donnemartin/system-design-primer#sql-tuning)
 
-To further address the high read and write requests, we should also consider moving appropriate data to a [**NoSQL Database**](https://github.com/donnemartin/system-design-primer#nosql) such as DynamoDB.
+さらに高頻度の読み込み書き込み要求に対応するには、データをDynamoDBといった適切な[**NoSQLデータベース**](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#nosql)に移すことを考えるべきでしょう。
 
-We can further separate out our [**Application Servers**](https://github.com/donnemartin/system-design-primer#application-layer) to allow for independent scaling.  Batch processes or computations that do not need to be done in real-time can be done [**Asynchronously**](https://github.com/donnemartin/system-design-primer#asynchronism) with **Queues** and **Workers**:
+さらに[**アプリケーションサーバ**](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E3%82%A2%E3%83%97%E3%83%AA%E3%82%B1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3%E5%B1%A4)を分割して個別にスケールさせることもできます。バッチ処理や計算でリアルタイムである必要がないものは**キュー**や**ワーカ**を使って[**非同期**](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E9%9D%9E%E5%90%8C%E6%9C%9F%E5%87%A6%E7%90%86)に実行できます。
 
-* For example, in a photo service, the photo upload and the thumbnail creation can be separated:
-    * **Client** uploads photo
-    * **Application Server** puts a job in a **Queue** such as SQS
-    * The **Worker Service** on EC2 or Lambda pulls work off the **Queue** then:
-        * Creates a thumbnail
-        * Updates a **Database**
-        * Stores the thumbnail in the **Object Store**
+* 例えば写真サービスでは、写真のアップロードとサムネイル作成は分割できます:
+    * **クライアント**は写真をアップロード
+    * **アプリケーションサーバ**は仕事をSQS(Amazon SQS)といった**キュー**に追加
+    * EC2やLambdaといった**ワーカサービス**が**キュー**から仕事を引っ張ってきて:
+        * サムネイルをつくる
+        * **データベース**を更新
+        * サムネイルを**オブジェクトストア**に保存
 
-*Trade-offs, alternatives, and additional details:*
+
+
+**トレードオフ、代替案、さらなる詳細**
 
 * See the linked content above for details
 
