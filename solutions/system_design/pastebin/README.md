@@ -2,112 +2,119 @@
 
 *Note: This document links directly to relevant areas found in the [system design topics](https://github.com/donnemartin/system-design-primer#index-of-system-design-topics) to avoid duplication.  Refer to the linked content for general talking points, tradeoffs, and alternatives.*
 
-**Design Bit.ly** - is a similar question, except pastebin requires storing the paste contents instead of the original unshortened url.
+訳注: pastebin.comは、短かい文章を投稿でき、それに短かいURLを付与してくれるサービスです。
 
-## Step 1: Outline use cases and constraints
+**Bit.lyを設計せよ**は似た問題ですが、短縮していない元URLを覚えておくかわりにpastebinはコンテンツを保持する必要があります。
 
-> Gather requirements and scope the problem.
-> Ask questions to clarify use cases and constraints.
-> Discuss assumptions.
+## Step 1: 大体のユースケースと想定制約
 
-Without an interviewer to address clarifying questions, we'll define some use cases and constraints.
+> 問題の要件と範囲の情報を集めよう。ユースケースと想定される制約をはっきりさせるために質問をしよう。システムの前提について議論しよう。
 
-### Use cases
+今回は質問をする相手がいないので、ユースケースと制約については示しておくことにします。
 
-#### We'll scope the problem to handle only the following use cases
+### ユースケース
 
-* **User** enters a block of text and gets a randomly generated link
-    * Expiration
-        * Default setting does not expire
-        * Can optionally set a timed expiration
-* **User** enters a paste's url and views the contents
-* **User** is anonymous
-* **Service** tracks analytics of pages
-    * Monthly visit stats
-* **Service** deletes expired pastes
-* **Service** has high availability
+#### 今回は次のユースケースのみを扱う問題に取り組みます
+(訳注: ランダム生成されたlinkのことをpasteとよんでいるようです)
+* **ユーザ**は文章を入力し、ランダムに生成されたリンクを得る
+    * 失効
+        * デフォルト設定では失効しない
+        * オプションで失効する時限がつけられる
+* **ユーザ**はpasteのURLを入力して、内容を見る
+* **ユーザ**は匿名である
+* **サービス**はページのanalyticsを記録する
+    * 月々の訪問の統計
+* **サービス**は失効したpasteを消去する
+* **サービス**には高い可用性(availability)がある
 
-#### Out of scope
+#### 今回取り組まないこと
 
-* **User** registers for an account
-    * **User** verifies email
-* **User** logs into a registered account
-    * **User** edits the document
-* **User** can set visibility
-* **User** can set the shortlink
+* **ユーザ**はアカウントを登録する
+    * **ユーザ**はメールを確認する
+* **ユーザ**が登録ずみのアカウントにログインする
+    * **ユーザ**が文書を編集する
+* **ユーザ**が閲覧可能不可能を設定する
+* **ユーザ**がshort linkを設定できる
 
-### Constraints and assumptions
+### 制約と前提
 
-#### State assumptions
+#### 稼動している状態についての前提
 
-* Traffic is not evenly distributed
-* Following a short link should be fast
-* Pastes are text only
-* Page view analytics do not need to be realtime
-* 10 million users
-* 10 million paste writes per month
-* 100 million paste reads per month
-* 10:1 read to write ratio
+* トラフィック(一定時間の通信量)は均等に分布しない
+* short linkをたどるのは高速である
+* pasteは文章のみ
+* 閲覧数のanalyticsはリアルタイムである必要はない
+* 10Mぐらいのユーザ
+* 一ヶ月に10Mのpasteの書き込み
+* 一ヶ月に100Mのpasteの読み込み
+* 読み書きの比は10:1
 
-#### Calculate usage
 
-**Clarify with your interviewer if you should run back-of-the-envelope usage calculations.**
+#### 使用量を計算する
 
-* Size per paste
-    * 1 KB content per paste
-    * `shortlink` - 7 bytes
-    * `expiration_length_in_minutes` - 4 bytes
-    * `created_at` - 5 bytes
-    * `paste_path` - 255 bytes
-    * total = ~1.27 KB
-* 12.7 GB of new paste content per month
-    * 1.27 KB per paste * 10 million pastes per month
-    * ~450 GB of new paste content in 3 years
-    * 360 million shortlinks in 3 years
-    * Assume most are new pastes instead of updates to existing ones
-* 4 paste writes per second on average
-* 40 read requests per second on average
+**使用量を封筒裏計算(ざっくり計算すること)する必要があるかどうかは面接官に聞いてはっきりさせましょう**
 
-Handy conversion guide:
+* paste1個あたりのサイズ
+    * コンテンツは1KB/paste
+    * `shortlink` - 7バイト
+    * `expiration_length_in_minutes` - 4バイト
+        * 訳注: 4バイトだと2の32乗分で、log(2^32)=32log(2)=10なので、1e10分=1e8時間=4e6日=1e5ヶ月=1000年が最大になる。int使うのが簡単だしまあそうか。
+    * `created_at` - 5バイト
+        * 訳注: MySQLだとcreated_atはDATETIME型で、精度によっては5バイトで済むらしい。どうせ概算なんだし8バイトということにしておいていいような気がするが…
+    * `paste_path` - 255バイト
+    * 合計 = ～1.27 KB
+* 一ヶ月に12.7GBのpasteコンテンツ
+    * 1.27KB/paste * 10M pastes/月
+        * 訳注: (1.27 * 10)(K * M)B/月 = 12.7GB/月
+    * 3年で～450GBの新しいpasteコンテンツ
+        * 訳注: 3年ってどこから出てきたんだ？
+    * 3年で360Mのshort link
+        * 訳注: 10M pastes/月 * 12月/年 * 3年 = 360M pastes
+    * 既存のを上書きするのではなく、ほとんどが新しいpasteだと仮定する
+* 平均で一秒あたり4pasteの書き込み 
+    * 訳注: 10M paste/月 * (1/30)月/日 * (1/86400)日/秒 = (10M / 2400000) paste/秒 = 10/2.5 paste/秒 = 4 paste/秒。1月は大体2.5M秒なのね。
+* 平均で一秒あたり40の読み込みリクエスト
 
-* 2.5 million seconds per month
-* 1 request per second = 2.5 million requests per month
-* 40 requests per second = 100 million requests per month
-* 400 requests per second = 1 billion requests per month
+便利な変換ガイド:
+* 2.5M 秒/月
+* 1リクエスト/秒 = 2.5Mリクエスト/月
+* 40リクエスト/秒 = 100Mリクエスト/月
+* 400リクエスト/秒 = 1Gリクエスト/月 (訳注: もともとbillionって書いてありましたがSI補助のほうが日本人的には楽なので…。10の9乗です。)
 
-## Step 2: Create a high level design
+## Step 2: ハイレベルな(おおまかな)設計を作ろう
 
-> Outline a high level design with all important components.
+> 重要な要素をすべて含んだハイレベルデザインをざっくり作ろう。
 
 ![Imgur](http://i.imgur.com/BKsBnmG.png)
 
-## Step 3: Design core components
+訳注: なんでAnalyticsはObject storeにのびてるの？
 
-> Dive into details for each core component.
+## Step 3: コア部品を設計しよう
 
-### Use case: User enters a block of text and gets a randomly generated link
+> それぞれのコア部品の詳細に分け入ろう。
 
-We could use a [relational database](https://github.com/donnemartin/system-design-primer#relational-database-management-system-rdbms) as a large hash table, mapping the generated url to a file server and path containing the paste file.
+### ユースケース: ユーザが文章を入力して、ランダム生成されたリンクを得る
 
-Instead of managing a file server, we could use a managed **Object Store** such as Amazon S3 or a [NoSQL document store](https://github.com/donnemartin/system-design-primer#document-store).
+[リレーショナルデータベース](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E3%83%AA%E3%83%AC%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%8A%E3%83%AB%E3%83%87%E3%83%BC%E3%82%BF%E3%83%99%E3%83%BC%E3%82%B9%E3%83%9E%E3%83%8D%E3%82%B8%E3%83%A1%E3%83%B3%E3%83%88%E3%82%B7%E3%82%B9%E3%83%86%E3%83%A0-rdbms)を、生成されたURLをpasteファイルを含むファイルサーバとパスにマップする巨大なハッシュテーブルとして利用することができるでしょう。
 
-An alternative to a relational database acting as a large hash table, we could use a [NoSQL key-value store](https://github.com/donnemartin/system-design-primer#key-value-store).  We should discuss the [tradeoffs between choosing SQL or NoSQL](https://github.com/donnemartin/system-design-primer#sql-or-nosql).  The following discussion uses the relational database approach.
+ファイルサーバへマップするかわりに、Amazon S3や[NoSQLドキュメントストア](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88%E3%82%B9%E3%83%88%E3%82%A2)といった、マネージドな(サービスとして提供されている)**オブジェクトストア**を利用することもできるでしょう。
 
-* The **Client** sends a create paste request to the **Web Server**, running as a [reverse proxy](https://github.com/donnemartin/system-design-primer#reverse-proxy-web-server)
-* The **Web Server** forwards the request to the **Write API** server
-* The **Write API** server does the following:
-    * Generates a unique url
-        * Checks if the url is unique by looking at the **SQL Database** for a duplicate
-        * If the url is not unique, it generates another url
-        * If we supported a custom url, we could use the user-supplied (also check for a duplicate)
-    * Saves to the **SQL Database** `pastes` table
-    * Saves the paste data to the **Object Store**
-    * Returns the url
+巨大なハッシュテーブルとして機能するリレーショナルデータベースの代用品としては、[NoSQLキーバリューストア](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E3%82%AD%E3%83%BC%E3%83%90%E3%83%AA%E3%83%A5%E3%83%BC%E3%82%B9%E3%83%88%E3%82%A2)を利用することができるでしょう。これに関しては、[SQLとNoSQLのトレードオフ](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#sql%E3%81%8Bnosql%E3%81%8B)について議論する必要があるでしょう。次では、リレーショナルデータベースを利用するアプローチについて議論しています。
 
-**Clarify with your interviewer how much code you are expected to write**.
+* **クライアント**は[リバースプロキシ](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E3%83%AA%E3%83%90%E3%83%BC%E3%82%B9%E3%83%97%E3%83%AD%E3%82%AD%E3%82%B7web%E3%82%B5%E3%83%BC%E3%83%90%E3%83%BC)として動作している**ウェブサーバ**にpaste作成リクエストを送信します。
+* **ウェブサーバ**は**書き込みAPI**サーバにこのリクエストを転送します。
+* **書き込みAPI**サーバは次のことをします:
+    * 唯一性のあるURLを生成する
+        * **SQLデータベース**を見て重複を探し、唯一性を確認する
+        * もしURLが唯一でないなら、別のURLを生成する
+        * もしカスタムURLをサポートするなら、ユーザから与えられたものを使う(やはり重複は確認する)
+    * **SQLデータベース**の`pastes`テーブルに保存する
+    * pasteのデータを**オブジェクトストア**に保存する
+    * URLを返す
 
-The `pastes` table could have the following structure:
+**どのぐらいのコードを書くことが期待されているのか面接官に聞いてはっきりさせよう。**
 
+`pastes`テーブルは次のような構造を持つでしょう:
 ```
 shortlink char(7) NOT NULL
 expiration_length_in_minutes int NOT NULL
@@ -116,19 +123,21 @@ paste_path varchar(255) NOT NULL
 PRIMARY KEY(shortlink)
 ```
 
-We'll create an [index](https://github.com/donnemartin/system-design-primer#use-good-indices) on `shortlink ` and `created_at` to speed up lookups (log-time instead of scanning the entire table) and to keep the data in memory.  Reading 1 MB sequentially from memory takes about 250 microseconds, while reading from SSD takes 4x and from disk takes 80x longer.<sup><a href=https://github.com/donnemartin/system-design-primer#latency-numbers-every-programmer-should-know>1</a></sup>
+ルックアップを高速化し(テーブル全体をなめる代わりにlog時間で)、メモリにデータを保持するために`shortlink`と`created_at`に[インデックス](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E3%82%A4%E3%83%B3%E3%83%87%E3%83%83%E3%82%AF%E3%82%B9%E3%82%92%E5%8A%B9%E6%9E%9C%E7%9A%84%E3%81%AB%E7%94%A8%E3%81%84%E3%82%8B)を作りましょう。1MBをメモリからシーケンシャルに読むには約250msかかる一方、SSDから読むには約4倍、ディスクから読むには約80倍かかります。<sup><a href=https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E5%85%A8%E3%81%A6%E3%81%AE%E3%83%97%E3%83%AD%E3%82%B0%E3%83%A9%E3%83%9E%E3%83%BC%E3%81%8C%E7%9F%A5%E3%82%8B%E3%81%B9%E3%81%8D%E3%83%AC%E3%82%A4%E3%83%86%E3%83%B3%E3%82%B7%E3%83%BC%E5%80%A4>1</a></sup>
 
-To generate the unique url, we could:
 
-* Take the [**MD5**](https://en.wikipedia.org/wiki/MD5) hash of the user's ip_address + timestamp
-    * MD5 is a widely used hashing function that produces a 128-bit hash value
-    * MD5 is uniformly distributed
-    * Alternatively, we could also take the MD5 hash of randomly-generated data
-* [**Base 62**](https://www.kerstner.at/2012/07/shortening-strings-using-base-62-encoding/) encode the MD5 hash
-    * Base 62 encodes to `[a-zA-Z0-9]` which works well for urls, eliminating the need for escaping special characters
-    * There is only one hash result for the original input and Base 62 is deterministic (no randomness involved)
-    * Base 64 is another popular encoding but provides issues for urls because of the additional `+` and `/` characters
-    * The following [Base 62 pseudocode](http://stackoverflow.com/questions/742013/how-to-code-a-url-shortener) runs in O(k) time where k is the number of digits = 7:
+唯一のURLを生成するには、こんなことができるでしょう:
+
+* ユーザのIPアドレスとタイムスタンプから[**MD5**](https://ja.wikipedia.org/wiki/MD5)ハッシュを生成する
+    * MD5は128bitのハッシュ値を生成するのによく使われるハッシュ関数
+    * MD5は一様に分布する
+    * かわりに、ランダム生成されたデータのMD5ハッシュを使うこともできる
+* [**Base62**](https://www.kerstner.at/2012/07/shortening-strings-using-base-62-encoding/)はMD5ハッシュをエンコードする
+    * Base62はURLに適している`[a-zA-Z0-9]`にエンコードし、特殊文字をエスケープする必要をなくしている
+    * オリジナルの入力に対してハッシュの結果は1つしかなく、Base62は決定的(deterministic、ランダム性がない)
+    * Base64はまた別のエンコーディング法だが、`+`と`/`がさらにでるためにURLとして使うには問題がある
+    * 以下の[Base62疑似コード](http://stackoverflow.com/questions/742013/how-to-code-a-url-shortener)はO(k)時間で動作する。ここで、kは桁数=7。
+        * 訳注: 62進法変換とすべきか迷った
 
 ```python
 def base_encode(num, base=62):
@@ -140,18 +149,19 @@ def base_encode(num, base=62):
     digits = digits.reverse
 ```
 
-* Take the first 7 characters of the output, which results in 62^7 possible values and should be sufficient to handle our constraint of 360 million shortlinks in 3 years:
+* 出力の先頭7文字をとると、62^7とおりの値ができ、これは3年で360Mのshortlinkという制約を扱うのに十分でしょう:
 
 ```python
 url = base_encode(md5(ip_address+timestamp))[:URL_LENGTH]
 ```
 
-We'll use a public [**REST API**](https://github.com/donnemartin/system-design-primer#representational-state-transfer-rest):
+公開された[**REST API**](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#representational-state-transfer-rest)を利用しましょう:
 
 ```
 $ curl -X POST --data '{ "expiration_length_in_minutes": "60", \
     "paste_contents": "Hello World!" }' https://pastebin.com/api/v1/paste
 ```
+訳注: -XでHTTPメソッドを指定
 
 Response:
 
@@ -161,16 +171,16 @@ Response:
 }
 ```
 
-For internal communications, we could use [Remote Procedure Calls](https://github.com/donnemartin/system-design-primer#remote-procedure-call-rpc).
+内部通信のためには、[遠隔手続呼出(RPC)](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E9%81%A0%E9%9A%94%E6%89%8B%E7%B6%9A%E5%91%BC%E5%87%BA-rpc)を使いましょう。
 
-### Use case: User enters a paste's url and views the contents
+### ユースケース: ユーザがpasteのURLを入力し、コンテンツを見る
 
-* The **Client** sends a get paste request to the **Web Server**
-* The **Web Server** forwards the request to the **Read API** server
-* The **Read API** server does the following:
-    * Checks the **SQL Database** for the generated url
-        * If the url is in the **SQL Database**, fetch the paste contents from the **Object Store**
-        * Else, return an error message for the user
+* **クライアント**は**ウェブサーバ**へのpasteを取得するためのリクエストを送信する
+* **ウェブサーバ**はリクエストを**読み込みAPI**サーバに転送する
+* **読み込みAPI**サーバは次のことをする:
+    * 生成されたURLを**SQLデータベース**から探す
+        * もしURLが**SQLデータベース**にあるなら、**オブジェクトストア**からpasteコンテンツを取得する
+        * そうでないなら、ユーザにエラーメッセージを返す
 
 REST API:
 
@@ -188,11 +198,11 @@ Response:
 }
 ```
 
-### Use case: Service tracks analytics of pages
+### ユースケース: サービスがページ訪問を解析する(訳注: Service tracks analytics of pagesだったが良い訳がわからん)
 
-Since realtime analytics are not a requirement, we could simply **MapReduce** the **Web Server** logs to generate hit counts.
+リアルタイムの解析は必要ないので、単に訪問数を生成するように**ウェブサーバ**のログを**MapReduce**すればよい。
 
-**Clarify with your interviewer how much code you are expected to write**.
+**どのぐらいコードを書くことが要求されているか、面接官に聞いてはっきりさせましょう**
 
 ```python
 class HitCounts(MRJob):
@@ -227,25 +237,25 @@ class HitCounts(MRJob):
         yield key, sum(values)
 ```
 
-### Use case: Service deletes expired pastes
+### ユースケース: サービスが失効したpasteを削除する
 
-To delete expired pastes, we could just scan the **SQL Database** for all entries whose expiration timestamp are older than the current timestamp.  All expired entries would then be deleted (or  marked as expired) from the table.
+失効したpasteを削除するには、単に現在のタイムスタンプより古い失効したタイムスタンプのエントリを**SQLデータベース**をなめて削除すればよい。失効したエントリ全てはテーブルから削除(あるいは失効とマーク)する。
 
-## Step 4: Scale the design
+## Step 4: 設計をスケールさせる
 
-> Identify and address bottlenecks, given the constraints.
+> 制約のもとでボトルネックを特定して対処しましょう。
 
 ![Imgur](http://i.imgur.com/4edXG0T.png)
 
-**Important: Do not simply jump right into the final design from the initial design!**
+**重要: 初期設計から最終設計にいきなりジャンプするのはやめましょう！**
 
-State you would do this iteratively: 1) **Benchmark/Load Test**, 2) **Profile** for bottlenecks 3) address bottlenecks while evaluating alternatives and trade-offs, and 4) repeat.  See [Design a system that scales to millions of users on AWS](../scaling_aws/README.md) as a sample on how to iteratively scale the initial design.
+次のことを繰り返し行うことを言います: 1)**ベンチマーク/負荷試験**する、 2)ボトルネックを**プロファイル**する、 3)代替案とトレードオフを評価しながらボトルネックに対処する、4)これを繰り返す。最初の設計をどうやって繰り返しスケールさせていくかというサンプルとして、[AWSで何百万ものユーザにシステムをスケールさせるように設計する(英語版)](../scaling_aws/README.md)を見よ。
 
-It's important to discuss what bottlenecks you might encounter with the initial design and how you might address each of them.  For example, what issues are addressed by adding a **Load Balancer** with multiple **Web Servers**?  **CDN**?  **Master-Slave Replicas**?  What are the alternatives and **Trade-Offs** for each?
+最初の設計でどんなボトルネックに出会すか、それらにどんな風に取り組めるかを議論するのが重要です。たとえば、複数の**ウェブサーバ**と**ロードバランサ**を追加することによってどんな問題に対処できるでしょう。**CDN**は？**マスタースレーブ レプリケーション**は？それぞれの代替案や**トレードオフ**は？
 
-We'll introduce some components to complete the design and to address scalability issues.  Internal load balancers are not shown to reduce clutter.
+設計を完成させ、スケーラビリティの問題に取り組むための部品を紹介しましょう。内部のロードバランサはごちゃごちゃを避けるために除いてあります。
 
-*To avoid repeating discussions*, refer to the following [system design topics](https://github.com/donnemartin/system-design-primer#index-of-system-design-topics) for main talking points, tradeoffs, and alternatives:
+*議論の繰り返しを避けるために*、主な話題、トレードオフ、代替案のため[システム設計目次](https://github.com/donnemartin/system-design-primer/blob/master/README-ja.md#%E3%82%B7%E3%82%B9%E3%83%86%E3%83%A0%E8%A8%AD%E8%A8%88%E7%9B%AE%E6%AC%A1)を参照してください:
 
 * [DNS](https://github.com/donnemartin/system-design-primer#domain-name-system)
 * [CDN](https://github.com/donnemartin/system-design-primer#content-delivery-network)
@@ -260,24 +270,26 @@ We'll introduce some components to complete the design and to address scalabilit
 * [Consistency patterns](https://github.com/donnemartin/system-design-primer#consistency-patterns)
 * [Availability patterns](https://github.com/donnemartin/system-design-primer#availability-patterns)
 
-The **Analytics Database** could use a data warehousing solution such as Amazon Redshift or Google BigQuery.
+(訳注:リンクははりなおしてない)
 
-An **Object Store** such as Amazon S3 can comfortably handle the constraint of 12.7 GB of new content per month.
+**Analytics Database**としてAmazon RedshiftやGoogle Bigqueryといったデータウェアハウスのソリューションを利用することができるでしょう。
 
-To address the 40 *average* read requests per second (higher at peak), traffic for popular content should be handled by the **Memory Cache** instead of the database.  The **Memory Cache** is also useful for handling the unevenly distributed traffic and traffic spikes.  The **SQL Read Replicas** should be able to handle the cache misses, as long as the replicas are not bogged down with replicating writes.
+Amazon S3といった**オブジェクトストア**を使えば一ヶ月12.7GBという制約をかるがる扱うことができるでしょう。
 
-4 *average* paste writes per second (with higher at peak) should be do-able for a single **SQL Write Master-Slave**.  Otherwise, we'll need to employ additional SQL scaling patterns:
+*平均*秒間40の読み込みリクエスト(ピークではもっとある)に対応するには、人気のあるコンテンツのトラフィックはデータベースのかわりに**メモリキャッシュ**で扱うべきでしょう。**メモリキャッシュ**は不均等に分散したトラフィックとトラフィックの急激な上昇を扱うのにも便利です。**SQL読み込みレプリケーション**は、レプリケーションが書き込みのレプリケーションがうまくいっている限り、キャッシュミスに対応できるべきです。
+
+*平均*秒間4の書き込みリクエスト(ピークではもっとある)が**SQL書き込みマスタースレーブ**で実行できなければいけません。さもなければ、SQLをスケールさせる追加のパターンを利用しなければいけません:
 
 * [Federation](https://github.com/donnemartin/system-design-primer#federation)
 * [Sharding](https://github.com/donnemartin/system-design-primer#sharding)
 * [Denormalization](https://github.com/donnemartin/system-design-primer#denormalization)
 * [SQL Tuning](https://github.com/donnemartin/system-design-primer#sql-tuning)
 
-We should also consider moving some data to a **NoSQL Database**.
+データを**NoSQLデータベース**に移すことも検討すべきでしょう。
 
-## Additional talking points
+## 追加で話すべきこと
 
-> Additional topics to dive into, depending on the problem scope and time remaining.
+> 問題の範囲や残り時間によって深掘りすべき追加の話題です。
 
 #### NoSQL
 
